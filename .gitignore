@@ -1,0 +1,27 @@
+# Credentials — keep real values outside the repository.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.mobileprovision
+credentials.json
+secrets.json
+settings.local.*
+
+# DeepSeek Harness user data. The launcher stores this in Application Support,
+# but ignore it as a safeguard if it is ever copied into the project.
+.dsh/
+dsh-home/
+workspace/
+harness.log
+DeepSeek Harness/
+
+# Local Xcode and build artifacts.
+.DS_Store
+build/
+DerivedData/
+**/xcuserdata/
+**/*.xcuserstate
