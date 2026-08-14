@@ -450,7 +450,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showsPluginManager) {
-            PluginManagementView()
+            PluginManagementView(onInstallationSucceeded: { harness.restart() })
         }
         .overlay(alignment: .top) {
             if harness.isManualUpdateCheck && harness.isCheckingForUpdate {
