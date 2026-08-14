@@ -2,16 +2,23 @@
 //  deepseek_launcherApp.swift
 //  deepseek launcher
 //
-//  Created by wjy on 2026/8/14.
-//
 
+import AppKit
 import SwiftUI
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        HarnessService.shared.stop()
+    }
+}
 
 @main
 struct deepseek_launcherApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        WindowGroup("DeepSeek Harness") {
+            ContentView(harness: .shared)
         }
     }
 }
