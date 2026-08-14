@@ -413,9 +413,12 @@ struct ContentView: View {
     }
 
     @ObservedObject var harness: HarnessService
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var balance = BalanceService()
     @State private var updatePanel: UpdatePanel?
     @State private var toast: Toast?
     @State private var showsPluginManager = false
+    @State private var showsBalance = false
 
     var body: some View {
         Group {
@@ -428,6 +431,9 @@ struct ContentView: View {
         .frame(minWidth: 980, minHeight: 680)
         .toolbar {
             if case .ready = harness.status {
+                ToolbarItem(placement: .automatic) {
+                    balanceButton
+                }
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button(action: { showsPluginManager = true }) {
                         Label("Plugins", systemImage: "puzzlepiece.extension")
@@ -473,8 +479,50 @@ struct ContentView: View {
         }
         .onChange(of: harness.status) { _, state in
             handleUpdateCompletion(state)
+            updateBalancePolling()
         }
-        .task { harness.start() }
+        .onChange(of: scenePhase) { _, _ in
+            updateBalancePolling()
+        }
+        .task {
+            harness.start()
+            updateBalancePolling()
+        }
+    }
+
+    private var balanceButton: some View {
+        Button(action: { showsBalance.toggle() }) {
+            HStack(spacing: 6) {
+                if balance.isRefreshing && !balance.hasHistoricalBalance {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "creditcard")
+                }
+                Text(balanceToolbarTitle)
+                if balance.isStale { Image(systemName: "exclamationmark.triangle.fill") }
+            }
+        }
+        .buttonStyle(.bordered)
+        .help("View account balance")
+        .accessibilityLabel("Account balance: \(balanceToolbarTitle)")
+        .popover(isPresented: $showsBalance, arrowEdge: .bottom) {
+            BalancePopoverView(balance: balance)
+        }
+    }
+
+    private var balanceToolbarTitle: String {
+        guard let primaryBalance = balance.primaryBalance else { return "Balance unavailable" }
+        return BalanceFormatter.amount(primaryBalance.total, currency: primaryBalance.currency)
+    }
+
+    private func updateBalancePolling() {
+        let harnessIsReady: Bool
+        if case .ready = harness.status {
+            harnessIsReady = true
+        } else {
+            harnessIsReady = false
+        }
+        balance.setPolling(isActive: harnessIsReady && scenePhase == .active)
     }
 
     @ViewBuilder
