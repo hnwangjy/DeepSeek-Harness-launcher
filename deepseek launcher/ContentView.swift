@@ -415,6 +415,7 @@ struct ContentView: View {
     @ObservedObject var harness: HarnessService
     @State private var updatePanel: UpdatePanel?
     @State private var toast: Toast?
+    @State private var showsPluginManager = false
 
     var body: some View {
         Group {
@@ -428,6 +429,10 @@ struct ContentView: View {
         .toolbar {
             if case .ready = harness.status {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    Button(action: { showsPluginManager = true }) {
+                        Label("Plugins", systemImage: "puzzlepiece.extension")
+                    }
+                    .help("Manage plugins")
                     if harness.isCheckingForUpdate {
                         ProgressView()
                             .controlSize(.small)
@@ -443,6 +448,9 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showsPluginManager) {
+            PluginManagementView()
         }
         .overlay(alignment: .top) {
             if harness.isManualUpdateCheck && harness.isCheckingForUpdate {
