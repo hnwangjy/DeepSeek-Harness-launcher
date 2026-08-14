@@ -23,9 +23,20 @@ final class HarnessService: ObservableObject {
         case failed(String)
     }
 
+    enum UpdateCheckState: Equatable {
+        case idle
+        case checking
+        case upToDate
+        case available(String)
+        case failed
+    }
+
     @Published private(set) var status: Status = .stopped
     @Published private(set) var installedVersion: String?
     @Published private(set) var updateAvailable = false
+    @Published private(set) var updateCheckState: UpdateCheckState = .idle
+    @Published private(set) var progressStep = 0
+    @Published private(set) var progressDetail = ""
     @Published private(set) var reloadID = UUID()
 
     let serverURL = URL(string: "http://127.0.0.1:3080")!
@@ -34,6 +45,15 @@ final class HarnessService: ObservableObject {
     private let nodeArchiveSHA256 = "e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1"
     private var process: Process?
     private var isBusy = false
+
+    let progressStepCount = 3
+    var progressFraction: Double {
+        Double(progressStep) / Double(progressStepCount)
+    }
+
+    var isCheckingForUpdate: Bool {
+        updateCheckState == .checking
+    }
 
     private init() {}
 
@@ -60,6 +80,7 @@ final class HarnessService: ObservableObject {
         isBusy = true
         stopProcessOnly()
         status = .starting
+        setProgress(step: 1, detail: "Preparing the local runtime")
         Task {
             await waitForServerToStop()
             do {
@@ -75,6 +96,9 @@ final class HarnessService: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         updateAvailable = false
+        updateCheckState = .idle
+        status = .updating
+        setProgress(step: 1, detail: "Preparing the local runtime")
         Task {
             do {
                 let paths = try makePaths()
@@ -94,14 +118,17 @@ final class HarnessService: ObservableObject {
     }
 
     private func prepareAndLaunch(_ paths: Paths, update: Bool) async throws {
-        status = .installingRuntime
+        status = update ? .updating : .installingRuntime
+        setProgress(step: 1, detail: "Preparing the local runtime")
         try await installManagedNodeIfNeeded(paths)
 
         status = update ? .updating : .installingHarness
+        setProgress(step: 2, detail: update ? "Downloading and installing the update" : "Downloading DeepSeek Harness")
         try await installHarness(paths, forceUpdate: update)
         installedVersion = localHarnessVersion(paths)
 
         status = .starting
+        setProgress(step: 3, detail: "Starting and verifying the local service")
         try launchHarness(paths)
         try await waitForServer()
         finishAsReady(paths)
@@ -110,6 +137,8 @@ final class HarnessService: ObservableObject {
     private func finishAsReady(_ paths: Paths) {
         isBusy = false
         status = .ready
+        progressStep = progressStepCount
+        progressDetail = "Ready"
         reloadID = UUID()
         Task { await checkForUpdate(paths) }
     }
@@ -117,7 +146,14 @@ final class HarnessService: ObservableObject {
     private func finishWithError(_ error: Error) {
         stopProcessOnly()
         isBusy = false
+        progressStep = 0
+        progressDetail = ""
         status = .failed(error.localizedDescription)
+    }
+
+    private func setProgress(step: Int, detail: String) {
+        progressStep = step
+        progressDetail = detail
     }
 
     private func makePaths() throws -> Paths {
@@ -219,13 +255,25 @@ final class HarnessService: ObservableObject {
     }
 
     private func checkForUpdate(_ paths: Paths) async {
-        guard let installedVersion else { return }
+        guard let installedVersion else {
+            updateCheckState = .idle
+            return
+        }
+        updateCheckState = .checking
         let npm = paths.runtime.appendingPathComponent("bin/npm")
         guard FileManager.default.isExecutableFile(atPath: npm.path),
               let result = try? await runProcess(npm.path, arguments: ["view", "@deepseek-ai/dsh", "version"], environment: runtimeEnvironment(paths)),
-              result.status == 0 else { return }
+              result.status == 0 else {
+            updateCheckState = .failed
+            return
+        }
         let latest = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        updateAvailable = !latest.isEmpty && latest != installedVersion
+        guard !latest.isEmpty else {
+            updateCheckState = .failed
+            return
+        }
+        updateAvailable = latest != installedVersion
+        updateCheckState = updateAvailable ? .available(latest) : .upToDate
     }
 
     private func localHarnessVersion(_ paths: Paths) -> String? {
@@ -353,9 +401,15 @@ struct ContentView: View {
                     Button(action: { harness.restart() }) {
                         Label("Restart Harness", systemImage: "arrow.clockwise")
                     }
-                    Button(action: { harness.updateHarness() }) {
-                        Label(harness.updateAvailable ? "Update Available" : "Update Harness", systemImage: "arrow.down.circle")
+                    if harness.isCheckingForUpdate {
+                        ProgressView()
+                            .controlSize(.small)
+                            .help("Checking for DeepSeek Harness updates")
                     }
+                    Button(action: { harness.updateHarness() }) {
+                        Label(harness.updateAvailable ? "Update Available" : "Update Harness", systemImage: harness.updateAvailable ? "arrow.down.circle.fill" : "arrow.down.circle")
+                    }
+                    .disabled(harness.isCheckingForUpdate)
                     .help(updateHelp)
                     Button(action: openInBrowser) {
                         Label("Open in Browser", systemImage: "safari")
@@ -377,7 +431,17 @@ struct ContentView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 560)
-            if isWorking { ProgressView().controlSize(.small) }
+            if isWorking {
+                VStack(spacing: 8) {
+                    ProgressView(value: harness.progressFraction)
+                        .frame(width: 300)
+                    Text("Step \(harness.progressStep) of \(harness.progressStepCount) · \(harness.progressDetail)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Installation progress: step \(harness.progressStep) of \(harness.progressStepCount). \(harness.progressDetail)")
+                }
+                .padding(.top, 4)
+            }
             if case .failed = harness.status {
                 Button("Try Again") { harness.start() }
                     .buttonStyle(.borderedProminent)
@@ -434,7 +498,18 @@ struct ContentView: View {
     }
 
     private var updateHelp: String {
-        harness.updateAvailable ? "A newer DeepSeek Harness version is available." : "Check for and install the newest DeepSeek Harness version."
+        switch harness.updateCheckState {
+        case .checking:
+            return "Checking for the latest DeepSeek Harness version."
+        case let .available(version):
+            return "DeepSeek Harness \(version) is available."
+        case .upToDate:
+            return "DeepSeek Harness is up to date."
+        case .failed:
+            return "Couldn't check for updates. You can try installing the latest version manually."
+        case .idle:
+            return "Install the newest DeepSeek Harness version."
+        }
     }
 
     private func openInBrowser() {
