@@ -35,6 +35,7 @@ final class HarnessService: ObservableObject {
     @Published private(set) var installedVersion: String?
     @Published private(set) var updateAvailable = false
     @Published private(set) var updateCheckState: UpdateCheckState = .idle
+    @Published private(set) var isManualUpdateCheck = false
     @Published private(set) var progressStep = 0
     @Published private(set) var progressDetail = ""
     @Published private(set) var reloadID = UUID()
@@ -109,6 +110,23 @@ final class HarnessService: ObservableObject {
                 finishWithError(error)
             }
         }
+    }
+
+    func checkForUpdateManually() {
+        guard !isCheckingForUpdate else { return }
+        isManualUpdateCheck = true
+        Task {
+            do {
+                let paths = try makePaths()
+                await checkForUpdate(paths)
+            } catch {
+                updateCheckState = .failed
+            }
+        }
+    }
+
+    func dismissManualUpdateCheck() {
+        isManualUpdateCheck = false
     }
 
     func stop() {
@@ -384,7 +402,19 @@ private enum LauncherError: LocalizedError {
 }
 
 struct ContentView: View {
+    private enum UpdatePanel: Equatable {
+        case available(String)
+        case installing
+    }
+
+    private struct Toast: Equatable {
+        let message: String
+        let symbol: String
+    }
+
     @ObservedObject var harness: HarnessService
+    @State private var updatePanel: UpdatePanel?
+    @State private var toast: Toast?
 
     var body: some View {
         Group {
@@ -398,16 +428,13 @@ struct ContentView: View {
         .toolbar {
             if case .ready = harness.status {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button(action: { harness.restart() }) {
-                        Label("Restart Harness", systemImage: "arrow.clockwise")
-                    }
                     if harness.isCheckingForUpdate {
                         ProgressView()
                             .controlSize(.small)
                             .help("Checking for DeepSeek Harness updates")
                     }
-                    Button(action: { harness.updateHarness() }) {
-                        Label(harness.updateAvailable ? "Update Available" : "Update Harness", systemImage: harness.updateAvailable ? "arrow.down.circle.fill" : "arrow.down.circle")
+                    Button(action: { harness.checkForUpdateManually() }) {
+                        Label(harness.updateAvailable ? "Update Available" : "Check for Updates", systemImage: "arrow.triangle.2.circlepath")
                     }
                     .disabled(harness.isCheckingForUpdate)
                     .help(updateHelp)
@@ -417,7 +444,75 @@ struct ContentView: View {
                 }
             }
         }
+        .overlay(alignment: .top) {
+            if harness.isManualUpdateCheck && harness.isCheckingForUpdate {
+                toastView(Toast(message: "Checking for updates…", symbol: "arrow.triangle.2.circlepath"))
+                    .padding(.top, 18)
+            } else if let toast {
+                toastView(toast)
+                    .padding(.top, 18)
+            }
+        }
+        .overlay {
+            if let updatePanel {
+                updatePanelView(updatePanel)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: updatePanel)
+        .animation(.easeInOut(duration: 0.2), value: toast)
+        .onChange(of: harness.updateCheckState) { _, state in
+            handleManualUpdateCheck(state)
+        }
+        .onChange(of: harness.status) { _, state in
+            handleUpdateCompletion(state)
+        }
         .task { harness.start() }
+    }
+
+    @ViewBuilder
+    private func updatePanelView(_ panel: UpdatePanel) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            switch panel {
+            case let .available(version):
+                Label("New version available", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.headline)
+                Text("DeepSeek Harness \(version) is ready to install. Your local service will restart automatically when the update finishes.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Spacer()
+                    Button("Not Now") { updatePanel = nil }
+                    Button("Update Now") {
+                        updatePanel = .installing
+                        harness.updateHarness()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            case .installing:
+                Label("Updating DeepSeek Harness", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.headline)
+                Text("Step \(harness.progressStep) of \(harness.progressStepCount) · \(harness.progressDetail)")
+                    .foregroundStyle(.secondary)
+                ProgressView(value: harness.progressFraction)
+                    .accessibilityLabel("Update progress: step \(harness.progressStep) of \(harness.progressStepCount). \(harness.progressDetail)")
+                Text("The app will reload the local workspace automatically when the update is complete.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
+    }
+
+    private func toastView(_ toast: Toast) -> some View {
+        Label(toast.message, systemImage: toast.symbol)
+            .font(.subheadline.weight(.medium))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
     }
 
     private var launchView: some View {
@@ -508,7 +603,48 @@ struct ContentView: View {
         case .failed:
             return "Couldn't check for updates. You can try installing the latest version manually."
         case .idle:
-            return "Install the newest DeepSeek Harness version."
+            return "Check for the newest DeepSeek Harness version."
+        }
+    }
+
+    private func handleManualUpdateCheck(_ state: HarnessService.UpdateCheckState) {
+        guard harness.isManualUpdateCheck else { return }
+        switch state {
+        case .checking, .idle:
+            return
+        case let .available(version):
+            harness.dismissManualUpdateCheck()
+            updatePanel = .available(version)
+        case .upToDate:
+            harness.dismissManualUpdateCheck()
+            showToast("DeepSeek Harness is already up to date.", symbol: "checkmark.circle.fill")
+        case .failed:
+            harness.dismissManualUpdateCheck()
+            showToast("Couldn't check for updates. Please try again.", symbol: "exclamationmark.triangle.fill")
+        }
+    }
+
+    private func handleUpdateCompletion(_ state: HarnessService.Status) {
+        guard updatePanel == .installing else { return }
+        switch state {
+        case .ready:
+            updatePanel = nil
+            showToast("Update complete. Your workspace has been reloaded.", symbol: "checkmark.circle.fill")
+        case .failed:
+            updatePanel = nil
+            showToast("The update couldn't be completed. Please try again.", symbol: "exclamationmark.triangle.fill")
+        default:
+            return
+        }
+    }
+
+    private func showToast(_ message: String, symbol: String) {
+        let nextToast = Toast(message: message, symbol: symbol)
+        toast = nextToast
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard toast == nextToast else { return }
+            toast = nil
         }
     }
 
