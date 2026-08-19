@@ -6,6 +6,7 @@
 //
 
 import Testing
+import CryptoKit
 import Foundation
 @testable import deepseek_launcher
 
@@ -194,6 +195,98 @@ struct deepseek_launcherTests {
         #expect(command.environment["Authorization"] == nil)
     }
 
+    @Test func parsesRegistryMetadataForUpdatePackage() throws {
+        let package = try UpdatePackageMetadataParser.parse(Data("""
+        {"version":"0.1.0-rc.7","dist":{"tarball":"https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.0-rc.7.tgz","integrity":"sha512-c2lnbmF0dXJl","shasum":"aabbcc","unpackedSize":12600000}}
+        """.utf8))
+
+        #expect(package.version == "0.1.0-rc.7")
+        #expect(package.tarballURL.lastPathComponent == "dsh-0.1.0-rc.7.tgz")
+        #expect(package.integrity == "sha512-c2lnbmF0dXJl")
+        #expect(package.shasum == "aabbcc")
+        #expect(package.unpackedSize == 12_600_000)
+    }
+
+    @Test func downloadProgressSupportsKnownAndUnknownContentLength() {
+        let known = UpdateDownloadState(downloadedBytes: 4_800_000, totalBytes: 12_600_000, bytesPerSecond: 2_100_000)
+        let unknown = UpdateDownloadState(downloadedBytes: 4_800_000, totalBytes: nil, bytesPerSecond: nil)
+
+        #expect(known.fractionCompleted == Double(4_800_000) / Double(12_600_000))
+        #expect(unknown.fractionCompleted == nil)
+        #expect(UpdateDisplayFormatter.speed(nil) == "正在连接…")
+        #expect(UpdateDisplayFormatter.speed(2_100_000).hasSuffix("/s"))
+    }
+
+    @Test func movingAverageSpeedUsesBoundedMonotonicWindow() {
+        var estimator = DownloadSpeedEstimator(window: 3)
+
+        #expect(estimator.record(downloadedBytes: 0, uptime: 100) == nil)
+        #expect(estimator.record(downloadedBytes: 3_000_000, uptime: 103) == 1_000_000)
+        #expect(estimator.record(downloadedBytes: 7_000_000, uptime: 107) == nil)
+    }
+
+    @Test func verifiesSRIIntegrityAndRejectsMismatch() throws {
+        let archive = FileManager.default.temporaryDirectory.appendingPathComponent("dsh-integrity-\(UUID().uuidString).tgz")
+        defer { try? FileManager.default.removeItem(at: archive) }
+        let contents = Data("package archive fixture".utf8)
+        try contents.write(to: archive)
+        let digest = Data(SHA512.hash(data: contents)).base64EncodedString()
+        let package = UpdatePackage(
+            version: "1.0.0",
+            tarballURL: URL(string: "https://example.invalid/dsh.tgz")!,
+            integrity: "sha512-\(digest)",
+            shasum: nil,
+            unpackedSize: nil
+        )
+
+        try PackageIntegrityValidator.verify(archive: archive, package: package)
+        let sha1 = Insecure.SHA1.hash(data: contents).map({ String(format: "%02x", $0) }).joined()
+        let invalid = UpdatePackage(version: package.version, tarballURL: package.tarballURL, integrity: "sha512-cm9uZw==", shasum: sha1, unpackedSize: nil)
+        #expect(throws: Error.self) {
+            try PackageIntegrityValidator.verify(archive: archive, package: invalid)
+        }
+    }
+
+    @Test func updateFlowRepresentsEveryUserVisiblePhase() {
+        let package = updateFixturePackage
+        let states: [HarnessUpdateFlow] = [
+            .available(package),
+            .downloading(UpdateDownloadState(downloadedBytes: 1, totalBytes: 2, bytesPerSecond: 1)),
+            .verifying(package),
+            .installing(package),
+            .restarting(package),
+            .ready(package.version)
+        ]
+
+        #expect(states.allSatisfy { $0 != .idle })
+        #expect(HarnessUpdateFlow.downloading(UpdateDownloadState(downloadedBytes: 0, totalBytes: nil, bytesPerSecond: nil)).isInProgress)
+        #expect(!HarnessUpdateFlow.ready(package.version).isInProgress)
+    }
+
+    @Test func updateOperationGatePreventsDuplicateUpdateAndTemporaryCleanupRemovesArchive() throws {
+        let gate = UpdateOperationGate()
+        #expect(gate.tryAcquire())
+        #expect(!gate.tryAcquire())
+        gate.release()
+        #expect(gate.tryAcquire())
+
+        let archive = FileManager.default.temporaryDirectory.appendingPathComponent("dsh-cleanup-\(UUID().uuidString).tgz")
+        try Data("temporary archive".utf8).write(to: archive)
+        UpdateTemporaryFiles.remove(archive)
+        #expect(!FileManager.default.fileExists(atPath: archive.path))
+    }
+
+    @Test func localNPMInstallUsesOnlyTheDownloadedArchive() {
+        let runtime = URL(fileURLWithPath: "/tmp/runtime")
+        let prefix = URL(fileURLWithPath: "/tmp/harness")
+        let archive = URL(fileURLWithPath: "/tmp/dsh-1.2.3.tgz")
+        let command = LocalHarnessInstallCommand.make(runtime: runtime, prefix: prefix, archive: archive, environment: ["PATH": "/tmp/runtime/bin:/usr/bin:/bin"])
+
+        #expect(command.executable.path == "/tmp/runtime/bin/npm")
+        #expect(command.arguments == ["install", "--no-audit", "--no-fund", "--no-package-lock", "--prefix", "/tmp/harness", "/tmp/dsh-1.2.3.tgz"])
+        #expect(!command.arguments.contains { $0.contains("@latest") })
+    }
+
 }
 
 @MainActor
@@ -253,6 +346,14 @@ private nonisolated enum StubInstallError: Error {
 private let availableBalanceJSON = """
 {"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"19.15","granted_balance":"0.00","topped_up_balance":"19.15"}]}
 """
+
+private let updateFixturePackage = UpdatePackage(
+    version: "0.1.0-rc.7",
+    tarballURL: URL(string: "https://example.invalid/dsh.tgz")!,
+    integrity: "sha512-c2lnbmF0dXJl",
+    shasum: nil,
+    unpackedSize: 12_600_000
+)
 
 @MainActor
 private func waitForBalance(_ service: BalanceService) async {
