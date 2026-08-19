@@ -284,6 +284,61 @@ nonisolated enum UpdateDisplayFormatter {
     }
 }
 
+nonisolated struct UpdateToolbarPresentation: Equatable, Sendable {
+    let title: String
+    let symbol: String?
+    let showsProgress: Bool
+    let isDisabled: Bool
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let help: String
+
+    static func make(isChecking: Bool, isAvailable: Bool, isUpdating: Bool) -> UpdateToolbarPresentation {
+        if isUpdating {
+            return UpdateToolbarPresentation(
+                title: "正在更新",
+                symbol: nil,
+                showsProgress: true,
+                isDisabled: true,
+                accessibilityLabel: "DeepSeek Harness 更新",
+                accessibilityValue: "正在更新",
+                help: "DeepSeek Harness 正在更新。"
+            )
+        }
+        if isChecking {
+            return UpdateToolbarPresentation(
+                title: "正在检查",
+                symbol: nil,
+                showsProgress: true,
+                isDisabled: true,
+                accessibilityLabel: "检查 DeepSeek Harness 更新",
+                accessibilityValue: "正在检查",
+                help: "正在检查 DeepSeek Harness 的最新版本。"
+            )
+        }
+        if isAvailable {
+            return UpdateToolbarPresentation(
+                title: "发现更新",
+                symbol: "arrow.triangle.2.circlepath",
+                showsProgress: false,
+                isDisabled: false,
+                accessibilityLabel: "发现 DeepSeek Harness 更新",
+                accessibilityValue: "有可用更新",
+                help: "发现 DeepSeek Harness 新版本，点击检查详情。"
+            )
+        }
+        return UpdateToolbarPresentation(
+            title: "检查更新",
+            symbol: "arrow.triangle.2.circlepath",
+            showsProgress: false,
+            isDisabled: false,
+            accessibilityLabel: "检查 DeepSeek Harness 更新",
+            accessibilityValue: "未在检查",
+            help: "检查 DeepSeek Harness 的最新版本。"
+        )
+    }
+}
+
 nonisolated final class DownloadStateBox: @unchecked Sendable {
     private let lock = NSLock()
     private var estimator = DownloadSpeedEstimator()

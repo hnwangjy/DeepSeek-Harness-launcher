@@ -320,6 +320,22 @@ struct deepseek_launcherTests {
         #expect(unavailable.text == "无法读取")
     }
 
+    @Test func updateToolbarPresentationKeepsOneStableButtonAcrossStates() {
+        let idle = UpdateToolbarPresentation.make(isChecking: false, isAvailable: false, isUpdating: false)
+        let checking = UpdateToolbarPresentation.make(isChecking: true, isAvailable: false, isUpdating: false)
+        let available = UpdateToolbarPresentation.make(isChecking: false, isAvailable: true, isUpdating: false)
+        let updating = UpdateToolbarPresentation.make(isChecking: false, isAvailable: true, isUpdating: true)
+
+        #expect(idle.symbol == "arrow.triangle.2.circlepath")
+        #expect(!idle.showsProgress && !idle.isDisabled)
+        #expect(checking.showsProgress && checking.isDisabled)
+        #expect(checking.accessibilityValue == "正在检查")
+        #expect(available.symbol == "arrow.triangle.2.circlepath")
+        #expect(available.accessibilityValue == "有可用更新")
+        #expect(updating.showsProgress && updating.isDisabled)
+        #expect(updating.accessibilityValue == "正在更新")
+    }
+
 }
 
 @MainActor

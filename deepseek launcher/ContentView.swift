@@ -569,16 +569,7 @@ struct ContentView: View {
                         Label("Plugins", systemImage: "puzzlepiece.extension")
                     }
                     .help("Manage plugins")
-                    if harness.isCheckingForUpdate {
-                        ProgressView()
-                            .controlSize(.small)
-                            .help("正在检查 DeepSeek Harness 更新")
-                    }
-                    Button(action: { harness.checkForUpdateManually() }) {
-                        Label(harness.updateAvailable ? "发现更新" : "检查更新", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(harness.isCheckingForUpdate || harness.isUpdatingHarness)
-                    .help(updateHelp)
+                    updateToolbarButton
                     Button(action: openInBrowser) {
                         Label("Open in Browser", systemImage: "safari")
                     }
@@ -648,6 +639,37 @@ struct ContentView: View {
     private var balanceToolbarTitle: String {
         guard let primaryBalance = balance.primaryBalance else { return "Balance unavailable" }
         return BalanceFormatter.amount(primaryBalance.total, currency: primaryBalance.currency)
+    }
+
+    private var updateToolbarPresentation: UpdateToolbarPresentation {
+        UpdateToolbarPresentation.make(
+            isChecking: harness.isCheckingForUpdate,
+            isAvailable: harness.updateAvailable,
+            isUpdating: harness.isUpdatingHarness
+        )
+    }
+
+    private var updateToolbarButton: some View {
+        let presentation = updateToolbarPresentation
+        return Button(action: { harness.checkForUpdateManually() }) {
+            HStack(spacing: 6) {
+                Group {
+                    if presentation.showsProgress {
+                        ProgressView().controlSize(.small)
+                    } else if let symbol = presentation.symbol {
+                        Image(systemName: symbol)
+                    }
+                }
+                .frame(width: 16, height: 16)
+                Text(presentation.title)
+                    .frame(width: 56, alignment: .leading)
+            }
+            .frame(width: 78, height: 18, alignment: .leading)
+        }
+        .disabled(presentation.isDisabled)
+        .help(presentation.help)
+        .accessibilityLabel(presentation.accessibilityLabel)
+        .accessibilityValue(presentation.accessibilityValue)
     }
 
     private func updateBalancePolling() {
@@ -899,21 +921,6 @@ struct ContentView: View {
             return "Start your local coding agent."
         case .ready:
             return ""
-        }
-    }
-
-    private var updateHelp: String {
-        switch harness.updateCheckState {
-        case .checking:
-            return "正在检查 DeepSeek Harness 的最新版本。"
-        case let .available(package):
-            return "DeepSeek Harness \(package.version) 已可更新。"
-        case .upToDate:
-            return "DeepSeek Harness 已是最新版本。"
-        case .failed:
-            return "无法检查更新，请稍后重试。"
-        case .idle:
-            return "检查 DeepSeek Harness 的最新版本。"
         }
     }
 
