@@ -286,9 +286,10 @@ nonisolated enum UpdateDisplayFormatter {
 
 nonisolated struct UpdateToolbarPresentation: Equatable, Sendable {
     let title: String
-    let symbol: String?
+    let symbol: String
     let showsProgress: Bool
     let isDisabled: Bool
+    let visualSlotPoints: Int
     let accessibilityLabel: String
     let accessibilityValue: String
     let help: String
@@ -297,9 +298,10 @@ nonisolated struct UpdateToolbarPresentation: Equatable, Sendable {
         if isUpdating {
             return UpdateToolbarPresentation(
                 title: "正在更新",
-                symbol: nil,
+                symbol: "arrow.triangle.2.circlepath",
                 showsProgress: true,
                 isDisabled: true,
+                visualSlotPoints: 16,
                 accessibilityLabel: "DeepSeek Harness 更新",
                 accessibilityValue: "正在更新",
                 help: "DeepSeek Harness 正在更新。"
@@ -308,9 +310,10 @@ nonisolated struct UpdateToolbarPresentation: Equatable, Sendable {
         if isChecking {
             return UpdateToolbarPresentation(
                 title: "正在检查",
-                symbol: nil,
+                symbol: "arrow.triangle.2.circlepath",
                 showsProgress: true,
                 isDisabled: true,
+                visualSlotPoints: 16,
                 accessibilityLabel: "检查 DeepSeek Harness 更新",
                 accessibilityValue: "正在检查",
                 help: "正在检查 DeepSeek Harness 的最新版本。"
@@ -322,6 +325,7 @@ nonisolated struct UpdateToolbarPresentation: Equatable, Sendable {
                 symbol: "arrow.triangle.2.circlepath",
                 showsProgress: false,
                 isDisabled: false,
+                visualSlotPoints: 16,
                 accessibilityLabel: "发现 DeepSeek Harness 更新",
                 accessibilityValue: "有可用更新",
                 help: "发现 DeepSeek Harness 新版本，点击检查详情。"
@@ -332,6 +336,7 @@ nonisolated struct UpdateToolbarPresentation: Equatable, Sendable {
             symbol: "arrow.triangle.2.circlepath",
             showsProgress: false,
             isDisabled: false,
+            visualSlotPoints: 16,
             accessibilityLabel: "检查 DeepSeek Harness 更新",
             accessibilityValue: "未在检查",
             help: "检查 DeepSeek Harness 的最新版本。"

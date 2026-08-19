@@ -652,19 +652,16 @@ struct ContentView: View {
     private var updateToolbarButton: some View {
         let presentation = updateToolbarPresentation
         return Button(action: { harness.checkForUpdateManually() }) {
-            HStack(spacing: 6) {
-                Group {
-                    if presentation.showsProgress {
-                        ProgressView().controlSize(.small)
-                    } else if let symbol = presentation.symbol {
-                        Image(systemName: symbol)
-                    }
-                }
-                .frame(width: 16, height: 16)
-                Text(presentation.title)
-                    .frame(width: 56, alignment: .leading)
+            ZStack {
+                Image(systemName: presentation.symbol)
+                    .opacity(presentation.showsProgress ? 0 : 1)
+                    .accessibilityHidden(true)
+                ProgressView()
+                    .controlSize(.small)
+                    .opacity(presentation.showsProgress ? 1 : 0)
+                    .accessibilityHidden(true)
             }
-            .frame(width: 78, height: 18, alignment: .leading)
+            .frame(width: CGFloat(presentation.visualSlotPoints), height: CGFloat(presentation.visualSlotPoints))
         }
         .disabled(presentation.isDisabled)
         .help(presentation.help)

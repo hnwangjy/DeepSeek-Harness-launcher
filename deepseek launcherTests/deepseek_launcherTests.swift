@@ -334,6 +334,7 @@ struct deepseek_launcherTests {
         #expect(available.accessibilityValue == "有可用更新")
         #expect(updating.showsProgress && updating.isDisabled)
         #expect(updating.accessibilityValue == "正在更新")
+        #expect(Set([idle.visualSlotPoints, checking.visualSlotPoints, available.visualSlotPoints, updating.visualSlotPoints]) == Set([16]))
     }
 
 }
