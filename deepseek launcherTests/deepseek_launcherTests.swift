@@ -287,6 +287,39 @@ struct deepseek_launcherTests {
         #expect(!command.arguments.contains { $0.contains("@latest") })
     }
 
+    @Test func appVersionInfoUsesBundleFieldsAndSafeFallbacks() {
+        let complete = AppVersionInfo(infoDictionary: [
+            "CFBundleShortVersionString": "1.0",
+            "CFBundleVersion": "1"
+        ])
+        let missing = AppVersionInfo(infoDictionary: [
+            "CFBundleShortVersionString": "  "
+        ])
+
+        #expect(complete.shortVersion == "1.0")
+        #expect(complete.buildNumber == "1")
+        #expect(complete.buildDisplay == "Build 1")
+        #expect(missing.shortVersion == "未知版本")
+        #expect(missing.buildNumber == "未知构建")
+    }
+
+    @Test @MainActor func versionCopyTextAndHarnessDisplayMapping() {
+        let appVersion = AppVersionInfo(infoDictionary: [
+            "CFBundleShortVersionString": "1.0",
+            "CFBundleVersion": "1"
+        ])
+        let installed = HarnessVersionDisplay.resolve(installedVersion: "0.1.0-rc.7", status: .ready)
+        let notInstalled = HarnessVersionDisplay.resolve(installedVersion: nil, status: .stopped)
+        let detecting = HarnessVersionDisplay.resolve(installedVersion: nil, status: .starting)
+        let unavailable = HarnessVersionDisplay.resolve(installedVersion: nil, status: .failed("error"))
+
+        #expect(appVersion.copyText(harness: installed) == "DeepSeek Harness Launcher 1.0 (1)\nDeepSeek Harness 0.1.0-rc.7")
+        #expect(installed.text == "0.1.0-rc.7")
+        #expect(notInstalled.text == "尚未安装")
+        #expect(detecting.text == "正在检测…")
+        #expect(unavailable.text == "无法读取")
+    }
+
 }
 
 @MainActor

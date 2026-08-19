@@ -15,10 +15,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct deepseek_launcherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup("DeepSeek Harness") {
             ContentView(harness: .shared)
         }
+        .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("关于 DeepSeek Harness Launcher") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: "about-deepseek-harness-launcher")
+                }
+            }
+        }
+
+        Window("关于 DeepSeek Harness Launcher", id: "about-deepseek-harness-launcher") {
+            AboutLauncherView(harness: .shared)
+        }
+        .defaultSize(width: 410, height: 305)
+        .windowResizability(.contentSize)
     }
 }
