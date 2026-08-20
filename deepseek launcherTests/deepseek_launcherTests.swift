@@ -337,6 +337,77 @@ struct deepseek_launcherTests {
         #expect(Set([idle.visualSlotPoints, checking.visualSlotPoints, available.visualSlotPoints, updating.visualSlotPoints]) == Set([16]))
     }
 
+    @Test func taskNotificationParserUsesTheRealServerRequestPayloadEnvelope() throws {
+        let frame = try HarnessMuxFrameParser.parse("""
+        {"type":"server-request","rpcId":"rpc-1","method":"events.mux","payload":{"type":"session/event","sessionId":"session-1","event":{"seq":4,"time":1,"type":"turn/start","data":{"turn":7}}}}
+        """)
+
+        guard case let .event(sessionID, sequence, type, data) = frame else {
+            Issue.record("The mux payload should parse as a session event.")
+            return
+        }
+        #expect(sessionID == "session-1")
+        #expect(sequence == 4)
+        #expect(type == "turn/start")
+        #expect(data["turn"] as? Int == 7)
+    }
+
+    @Test func taskNotificationWebSocketURLExplicitlyConvertsHTTPAndHTTPS() {
+        #expect(HarnessEventURLBuilder.make(serverURL: URL(string: "http://127.0.0.1:3080")!) == URL(string: "ws://127.0.0.1:3080/api/events.mux")!)
+        #expect(HarnessEventURLBuilder.make(serverURL: URL(string: "https://example.test/harness")!) == URL(string: "wss://example.test/harness/api/events.mux")!)
+        #expect(HarnessEventURLBuilder.make(serverURL: URL(string: "ftp://example.test")!) == nil)
+    }
+
+    @Test func persistedNotificationOptInCanResumeOnlyAfterAuthorizationAndReady() {
+        #expect(TaskNotificationConnectionPolicy.shouldConnect(isEnabled: true, authorization: .authorized, harnessIsReady: true))
+        #expect(!TaskNotificationConnectionPolicy.shouldConnect(isEnabled: true, authorization: .notDetermined, harnessIsReady: true))
+        #expect(!TaskNotificationConnectionPolicy.shouldConnect(isEnabled: true, authorization: .authorized, harnessIsReady: false))
+        #expect(!TaskNotificationConnectionPolicy.shouldConnect(isEnabled: false, authorization: .authorized, harnessIsReady: true))
+    }
+
+    @Test func taskNotificationEngineSendsOneCompletionAndOneErrorPerTurn() {
+        var engine = TaskNotificationEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 10_000)
+
+        #expect(engine.consume(taskEvent(sequence: 1, type: "turn/start", turn: 3), now: now).isEmpty)
+        let completion = engine.consume(taskEvent(sequence: 2, type: "turn/end", turn: 3), now: now)
+        #expect(completion == [TaskNotificationEvent(sessionID: "session", turn: 3, kind: .completed, body: "本轮任务已完成。")])
+        #expect(engine.consume(taskEvent(sequence: 3, type: "turn/end", turn: 3), now: now).isEmpty)
+
+        #expect(engine.consume(taskEvent(sequence: 4, type: "turn/start", turn: 4), now: now).isEmpty)
+        let failure = engine.consume(taskEvent(sequence: 5, type: "turn/end", turn: 4, errorMessage: "Bearer secret-token"), now: now)
+        #expect(failure.first?.kind == .failed)
+        #expect(!failure.first!.body.localizedCaseInsensitiveContains("bearer"))
+        #expect(!failure.first!.body.contains("secret-token"))
+    }
+
+    @Test func taskNotificationEngineDetectsStallOnceAndAllowsARecoveredTurnToStallAgain() {
+        var engine = TaskNotificationEngine()
+        let start = Date(timeIntervalSinceReferenceDate: 20_000)
+        _ = engine.consume(taskEvent(sequence: 1, type: "turn/start", turn: 9), now: start)
+
+        let firstStall = engine.stalledEvents(threshold: 300, now: start.addingTimeInterval(300))
+        #expect(firstStall.map(\.kind) == [.stuck])
+        #expect(engine.stalledEvents(threshold: 300, now: start.addingTimeInterval(301)).isEmpty)
+
+        _ = engine.consume(taskEvent(sequence: 2, type: "assistant/message", turn: nil), now: start.addingTimeInterval(302))
+        let secondStall = engine.stalledEvents(threshold: 300, now: start.addingTimeInterval(602))
+        #expect(secondStall.map(\.kind) == [.stuck])
+    }
+
+    @Test func taskNotificationEngineDoesNotReplayHistoricalCompletionAfterReconnect() {
+        var engine = TaskNotificationEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 30_000)
+        _ = engine.consume(.subscribed(sessionID: "session", lastSequence: 10), now: now)
+        #expect(engine.consume(taskEvent(sequence: 10, type: "turn/end", turn: 1), now: now).isEmpty)
+
+        _ = engine.consume(taskEvent(sequence: 11, type: "turn/start", turn: 2), now: now)
+        #expect(engine.consume(taskEvent(sequence: 12, type: "turn/end", turn: 2), now: now).map(\.kind) == [.completed])
+
+        _ = engine.consume(.subscribed(sessionID: "session", lastSequence: 12), now: now)
+        #expect(engine.consume(taskEvent(sequence: 12, type: "turn/end", turn: 2), now: now).isEmpty)
+    }
+
 }
 
 @MainActor
@@ -404,6 +475,19 @@ private let updateFixturePackage = UpdatePackage(
     shasum: nil,
     unpackedSize: 12_600_000
 )
+
+private func taskEvent(sequence: Int, type: String, turn: Int?, errorMessage: String? = nil) -> HarnessMuxFrameParser.Frame {
+    var data: [String: Any] = [:]
+    if let turn { data["turn"] = turn }
+    if type == "turn/end" {
+        if let errorMessage {
+            data["reason"] = ["kind": "error", "message": errorMessage]
+        } else {
+            data["reason"] = ["kind": "completed"]
+        }
+    }
+    return .event(sessionID: "session", sequence: sequence, type: type, data: data)
+}
 
 @MainActor
 private func waitForBalance(_ service: BalanceService) async {

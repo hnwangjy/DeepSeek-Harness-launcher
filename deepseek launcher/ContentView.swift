@@ -42,6 +42,7 @@ final class HarnessService: ObservableObject {
     @Published private(set) var reloadID = UUID()
 
     let serverURL = URL(string: "http://127.0.0.1:3080")!
+    let taskNotifications = TaskNotificationService.shared
 
     private let nodeVersion = "24.18.0"
     private let nodeArchiveSHA256 = "e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1"
@@ -88,6 +89,7 @@ final class HarnessService: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         stopProcessOnly()
+        taskNotifications.harnessDidBecomeUnavailable()
         status = .starting
         setProgress(step: 1, detail: "Preparing the local runtime")
         Task {
@@ -137,6 +139,7 @@ final class HarnessService: ObservableObject {
 
     func stop() {
         stopProcessOnly()
+        taskNotifications.harnessDidBecomeUnavailable()
         isBusy = false
         status = .stopped
     }
@@ -164,11 +167,13 @@ final class HarnessService: ObservableObject {
         progressStep = progressStepCount
         progressDetail = "Ready"
         reloadID = UUID()
+        taskNotifications.harnessDidBecomeReady(serverURL: serverURL)
         Task { await checkForUpdate(paths) }
     }
 
     private func finishWithError(_ error: Error) {
         stopProcessOnly()
+        taskNotifications.harnessDidBecomeUnavailable()
         isBusy = false
         progressStep = 0
         progressDetail = ""
@@ -263,6 +268,7 @@ final class HarnessService: ObservableObject {
 
         updateFlow = .restarting(package)
         stopProcessOnly()
+        taskNotifications.harnessDidBecomeUnavailable()
         await waitForServerToStop()
         let backup = try replaceHarness(with: staging, paths: paths)
         status = .starting
@@ -277,6 +283,7 @@ final class HarnessService: ObservableObject {
                 try? await waitForServer()
                 status = .ready
                 reloadID = UUID()
+                taskNotifications.harnessDidBecomeReady(serverURL: serverURL)
             }
             throw error
         }
@@ -288,6 +295,7 @@ final class HarnessService: ObservableObject {
         progressDetail = "Ready"
         reloadID = UUID()
         updateFlow = .ready(package.version)
+        taskNotifications.harnessDidBecomeReady(serverURL: serverURL)
         Task { await checkForUpdate(paths) }
     }
 
@@ -545,10 +553,12 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @StateObject private var balance = BalanceService()
+    @StateObject private var taskNotifications = TaskNotificationService.shared
     @State private var updatePanel: UpdatePanel?
     @State private var toast: Toast?
     @State private var showsPluginManager = false
     @State private var showsBalance = false
+    @State private var showsTaskNotifications = false
 
     var body: some View {
         Group {
@@ -563,6 +573,9 @@ struct ContentView: View {
             if case .ready = harness.status {
                 ToolbarItem(placement: .automatic) {
                     balanceButton
+                }
+                ToolbarItem(placement: .automatic) {
+                    taskNotificationButton
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button(action: { showsPluginManager = true }) {
@@ -609,10 +622,12 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, _ in
             updateBalancePolling()
+            taskNotifications.setAppIsActive(scenePhase == .active)
         }
         .task {
             harness.start()
             updateBalancePolling()
+            taskNotifications.setAppIsActive(scenePhase == .active)
         }
     }
 
@@ -639,6 +654,18 @@ struct ContentView: View {
     private var balanceToolbarTitle: String {
         guard let primaryBalance = balance.primaryBalance else { return "Balance unavailable" }
         return BalanceFormatter.amount(primaryBalance.total, currency: primaryBalance.currency)
+    }
+
+    private var taskNotificationButton: some View {
+        Button(action: { showsTaskNotifications.toggle() }) {
+            Image(systemName: taskNotifications.preferences.isEnabled ? "bell.fill" : "bell")
+                .frame(width: 16, height: 16)
+        }
+        .help("任务通知设置")
+        .accessibilityLabel(taskNotifications.preferences.isEnabled ? "任务通知，已启用" : "任务通知，未启用")
+        .popover(isPresented: $showsTaskNotifications, arrowEdge: .bottom) {
+            TaskNotificationPopoverView(notifications: taskNotifications)
+        }
     }
 
     private var updateToolbarPresentation: UpdateToolbarPresentation {
