@@ -242,9 +242,47 @@ nonisolated struct LocalHarnessInstallCommand: Equatable, Sendable {
     static func make(runtime: URL, prefix: URL, archive: URL, environment: [String: String]) -> LocalHarnessInstallCommand {
         LocalHarnessInstallCommand(
             executable: runtime.appendingPathComponent("bin/npm"),
-            arguments: ["install", "--no-audit", "--no-fund", "--no-package-lock", "--prefix", prefix.path, archive.path],
+            arguments: ["install", "--legacy-peer-deps", "--no-audit", "--no-fund", "--no-package-lock", "--prefix", prefix.path, archive.path],
             environment: environment
         )
+    }
+
+    static func addPeers(runtime: URL, prefix: URL, peers: [String], environment: [String: String]) -> LocalHarnessInstallCommand {
+        LocalHarnessInstallCommand(
+            executable: runtime.appendingPathComponent("bin/npm"),
+            arguments: ["install", "--legacy-peer-deps", "--no-audit", "--no-fund", "--no-package-lock", "--prefix", prefix.path] + peers,
+            environment: environment
+        )
+    }
+}
+
+nonisolated enum MissingPeerDependencyScanner {
+    static func requiredPeers(in prefix: URL, fileManager: FileManager = .default) -> [String] {
+        let modules = prefix.appendingPathComponent("node_modules", isDirectory: true)
+        guard let enumerator = fileManager.enumerator(
+            at: modules,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var missing: [String: String] = [:]
+        for case let packageJSON as URL in enumerator where packageJSON.lastPathComponent == "package.json" {
+            guard
+                let data = try? Data(contentsOf: packageJSON),
+                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let peers = object["peerDependencies"] as? [String: String]
+            else { continue }
+            let metadata = object["peerDependenciesMeta"] as? [String: [String: Any]] ?? [:]
+            for (name, requirement) in peers where metadata[name]?["optional"] as? Bool != true {
+                let installedManifest = modules
+                    .appendingPathComponent(name, isDirectory: true)
+                    .appendingPathComponent("package.json")
+                if !fileManager.fileExists(atPath: installedManifest.path) {
+                    missing[name] = requirement
+                }
+            }
+        }
+        return missing.map { "\($0.key)@\($0.value)" }.sorted()
     }
 }
 

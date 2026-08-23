@@ -276,15 +276,41 @@ struct deepseek_launcherTests {
         #expect(!FileManager.default.fileExists(atPath: archive.path))
     }
 
-    @Test func localNPMInstallUsesOnlyTheDownloadedArchive() {
+    @Test func localNPMInstallAvoidsPeerResolverBacktrackingAndUsesDownloadedArchive() {
         let runtime = URL(fileURLWithPath: "/tmp/runtime")
         let prefix = URL(fileURLWithPath: "/tmp/harness")
         let archive = URL(fileURLWithPath: "/tmp/dsh-1.2.3.tgz")
         let command = LocalHarnessInstallCommand.make(runtime: runtime, prefix: prefix, archive: archive, environment: ["PATH": "/tmp/runtime/bin:/usr/bin:/bin"])
 
         #expect(command.executable.path == "/tmp/runtime/bin/npm")
-        #expect(command.arguments == ["install", "--no-audit", "--no-fund", "--no-package-lock", "--prefix", "/tmp/harness", "/tmp/dsh-1.2.3.tgz"])
+        #expect(command.arguments == ["install", "--legacy-peer-deps", "--no-audit", "--no-fund", "--no-package-lock", "--prefix", "/tmp/harness", "/tmp/dsh-1.2.3.tgz"])
         #expect(!command.arguments.contains { $0.contains("@latest") })
+    }
+
+    @Test func peerInstallUsesExplicitResolvedPackages() {
+        let command = LocalHarnessInstallCommand.addPeers(
+            runtime: URL(fileURLWithPath: "/tmp/runtime"),
+            prefix: URL(fileURLWithPath: "/tmp/harness"),
+            peers: ["@deepseek-ai/dsh-fs@^1.2.3", "react@^18"],
+            environment: [:]
+        )
+
+        #expect(command.arguments.suffix(2) == ["@deepseek-ai/dsh-fs@^1.2.3", "react@^18"])
+        #expect(command.arguments.contains("--legacy-peer-deps"))
+    }
+
+    @Test func missingPeerScannerFindsRequiredPeersAndIgnoresOptionalOnes() throws {
+        let prefix = FileManager.default.temporaryDirectory.appendingPathComponent("peer-scan-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: prefix) }
+        let package = prefix.appendingPathComponent("node_modules/example")
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        let manifest: [String: Any] = [
+            "peerDependencies": ["required-peer": "^1.0.0", "optional-peer": "^2.0.0"],
+            "peerDependenciesMeta": ["optional-peer": ["optional": true]]
+        ]
+        try JSONSerialization.data(withJSONObject: manifest).write(to: package.appendingPathComponent("package.json"))
+
+        #expect(MissingPeerDependencyScanner.requiredPeers(in: prefix) == ["required-peer@^1.0.0"])
     }
 
     @Test func appVersionInfoUsesBundleFieldsAndSafeFallbacks() {

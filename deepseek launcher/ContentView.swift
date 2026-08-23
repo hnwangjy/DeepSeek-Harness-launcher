@@ -338,6 +338,30 @@ final class HarnessService: ObservableObject {
         guard result.status == 0, FileManager.default.fileExists(atPath: dsh.path) else {
             throw UpdateSupportError.installFailed
         }
+
+        // The current DSH release exposes a large set of required peer modules.
+        // npm's automatic peer resolver can spend minutes backtracking, so the
+        // archive is installed deterministically first and missing required peers
+        // are then added in small, explicit passes.
+        for _ in 0..<4 {
+            let peers = MissingPeerDependencyScanner.requiredPeers(in: prefix)
+            guard !peers.isEmpty else { return }
+            let peerCommand = LocalHarnessInstallCommand.addPeers(
+                runtime: paths.runtime,
+                prefix: prefix,
+                peers: peers,
+                environment: runtimeEnvironment(paths)
+            )
+            let peerResult = try await runProcess(
+                peerCommand.executable.path,
+                arguments: peerCommand.arguments,
+                environment: peerCommand.environment
+            )
+            guard peerResult.status == 0 else { throw UpdateSupportError.installFailed }
+        }
+        guard MissingPeerDependencyScanner.requiredPeers(in: prefix).isEmpty else {
+            throw UpdateSupportError.installFailed
+        }
     }
 
     private func removeUpdateArchive(_ archive: URL) {
