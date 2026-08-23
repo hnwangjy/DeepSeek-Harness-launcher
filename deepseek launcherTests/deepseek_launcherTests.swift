@@ -408,6 +408,15 @@ struct deepseek_launcherTests {
         #expect(engine.consume(taskEvent(sequence: 12, type: "turn/end", turn: 2), now: now).isEmpty)
     }
 
+    @Test func processRunnerDrainsVerboseChildOutputWithoutDeadlocking() async throws {
+        let result = try await ProcessRunner.run("/usr/bin/seq", arguments: ["1", "100000"])
+
+        #expect(result.status == 0)
+        #expect(result.output.hasPrefix("1\n2\n3\n"))
+        #expect(result.output.hasSuffix("100000\n"))
+        #expect(result.output.utf8.count > 500_000)
+    }
+
 }
 
 @MainActor

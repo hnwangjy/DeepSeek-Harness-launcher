@@ -482,6 +482,16 @@ final class HarnessService: ObservableObject {
         arguments: [String],
         environment: [String: String]? = nil
     ) async throws -> ProcessResult {
+        try await ProcessRunner.run(executable, arguments: arguments, environment: environment)
+    }
+}
+
+nonisolated enum ProcessRunner {
+    static func run(
+        _ executable: String,
+        arguments: [String],
+        environment: [String: String]? = nil
+    ) async throws -> ProcessResult {
         let pipe = Pipe()
         let command = Process()
         command.executableURL = URL(fileURLWithPath: executable)
@@ -490,12 +500,16 @@ final class HarnessService: ObservableObject {
         command.standardOutput = pipe
         command.standardError = pipe
         try command.run()
-        return await withCheckedContinuation { continuation in
-            command.terminationHandler = { process in
-                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                continuation.resume(returning: ProcessResult(status: process.terminationStatus, output: output))
-            }
-        }
+        // Drain the pipe while the child is running. Waiting until termination
+        // before reading can deadlock verbose commands such as npm install once
+        // the kernel pipe buffer fills up.
+        try? pipe.fileHandleForWriting.close()
+        let outputData = await Task.detached(priority: .utility) {
+            pipe.fileHandleForReading.readDataToEndOfFile()
+        }.value
+        command.waitUntilExit()
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        return ProcessResult(status: command.terminationStatus, output: output)
     }
 }
 
@@ -508,7 +522,7 @@ private struct Paths {
     let log: URL
 }
 
-private struct ProcessResult {
+nonisolated struct ProcessResult: Sendable {
     let status: Int32
     let output: String
 }
