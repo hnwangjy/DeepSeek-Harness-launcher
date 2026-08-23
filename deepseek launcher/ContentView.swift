@@ -8,6 +8,7 @@ import Combine
 import Foundation
 import SwiftUI
 import WebKit
+import Darwin
 
 @MainActor
 final class HarnessService: ObservableObject {
@@ -88,14 +89,14 @@ final class HarnessService: ObservableObject {
     func restart() {
         guard !isBusy else { return }
         isBusy = true
-        stopProcessOnly()
         taskNotifications.harnessDidBecomeUnavailable()
         status = .starting
         setProgress(step: 1, detail: "Preparing the local runtime")
         Task {
-            await waitForServerToStop()
             do {
                 let paths = try makePaths()
+                await stopManagedHarness(paths)
+                guard await waitForServerToStop() else { throw LauncherError.shutdownTimedOut }
                 try await prepareAndLaunch(paths)
             } catch {
                 finishWithError(error)
@@ -139,6 +140,10 @@ final class HarnessService: ObservableObject {
 
     func stop() {
         stopProcessOnly()
+        Task {
+            guard let paths = try? makePaths() else { return }
+            await stopManagedHarness(paths)
+        }
         taskNotifications.harnessDidBecomeUnavailable()
         isBusy = false
         status = .stopped
@@ -198,7 +203,8 @@ final class HarnessService: ObservableObject {
             harness: root.appendingPathComponent("harness", isDirectory: true),
             dshHome: root.appendingPathComponent("dsh-home", isDirectory: true),
             workspace: root.appendingPathComponent("workspace", isDirectory: true),
-            log: root.appendingPathComponent("harness.log")
+            log: root.appendingPathComponent("harness.log"),
+            pidFile: root.appendingPathComponent("harness.pid")
         )
         try FileManager.default.createDirectory(at: paths.dshHome, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: paths.workspace, withIntermediateDirectories: true)
@@ -267,9 +273,9 @@ final class HarnessService: ObservableObject {
         try await installHarnessArchive(archive, prefix: staging, paths: paths)
 
         updateFlow = .restarting(package)
-        stopProcessOnly()
+        await stopManagedHarness(paths)
         taskNotifications.harnessDidBecomeUnavailable()
-        await waitForServerToStop()
+        guard await waitForServerToStop() else { throw LauncherError.shutdownTimedOut }
         let backup = try replaceHarness(with: staging, paths: paths)
         status = .starting
         do {
@@ -418,6 +424,7 @@ final class HarnessService: ObservableObject {
         }
         process = launched
         try launched.run()
+        try String(launched.processIdentifier).write(to: paths.pidFile, atomically: true, encoding: .utf8)
     }
 
     private func checkForUpdate(_ paths: Paths) async {
@@ -475,6 +482,21 @@ final class HarnessService: ObservableObject {
         process = nil
     }
 
+    private func stopManagedHarness(_ paths: Paths) async {
+        stopProcessOnly()
+        defer { try? FileManager.default.removeItem(at: paths.pidFile) }
+        guard
+            let text = try? String(contentsOf: paths.pidFile, encoding: .utf8),
+            let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+            pid > 1,
+            let result = try? await runProcess("/bin/ps", arguments: ["-p", String(pid), "-o", "command="]),
+            result.status == 0,
+            result.output.contains(paths.runtime.appendingPathComponent("bin/node").path),
+            result.output.contains(paths.harness.appendingPathComponent("node_modules/@deepseek-ai/dsh/lib/bin.js").path)
+        else { return }
+        _ = Darwin.kill(pid, SIGTERM)
+    }
+
     private func serverIsReachable() async -> Bool {
         var request = URLRequest(url: serverURL)
         request.timeoutInterval = 1
@@ -494,11 +516,12 @@ final class HarnessService: ObservableObject {
         throw LauncherError.startupTimedOut
     }
 
-    private func waitForServerToStop() async {
+    private func waitForServerToStop() async -> Bool {
         for _ in 0..<30 {
-            guard await serverIsReachable() else { return }
+            guard await serverIsReachable() else { return true }
             try? await Task.sleep(for: .milliseconds(200))
         }
+        return false
     }
 
     private func runProcess(
@@ -544,6 +567,7 @@ private struct Paths {
     let dshHome: URL
     let workspace: URL
     let log: URL
+    let pidFile: URL
 }
 
 nonisolated struct ProcessResult: Sendable {
@@ -557,6 +581,7 @@ private enum LauncherError: LocalizedError {
     case harnessMissing
     case harnessExited(Int32)
     case startupTimedOut
+    case shutdownTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -570,6 +595,8 @@ private enum LauncherError: LocalizedError {
             return "DeepSeek Harness exited unexpectedly (code \(code))."
         case .startupTimedOut:
             return "Harness did not start within two minutes. Open the log file in Application Support for details."
+        case .shutdownTimedOut:
+            return "旧版 Harness 未能正常停止，请退出应用后重试。"
         }
     }
 }
